@@ -1,0 +1,756 @@
+---
+title: "Merge prices and conflicts"
+author: "Syver"
+date: "10/07/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+#install.packages("ellipsis")
+```
+
+## Load key packages
+```{r}
+library(tidyverse)
+library(lubridate)
+library(sf)
+library(zoo)
+library(ggplot2)
+```
+
+## Filter Data
+```{r}
+#quarter_filter <- c("2017 Q1")
+
+# = c("Battles")
+
+# This variable can be changed to filter the types of conflicts included in the analysis
+conflicts_filter = c("Battles", "Strategic developments", "Protests", "Violence against civilians", "Explosions/Remote violence", "Riots")
+```
+
+
+## Load and Prepare Price Data
+```{r}
+Niger_price <- read.csv("https://raw.githubusercontent.com/Syverpet/Spatial_Analysis_of_Food_Prices_and_Conflicts_in_SAHEL/main/Data/Price_Data/with_lat_long/Niger_prices_with_lat_long.csv")
+
+Mali_price <- read.csv("https://raw.githubusercontent.com/Syverpet/Spatial_Analysis_of_Food_Prices_and_Conflicts_in_SAHEL/main/Data/Price_Data/with_lat_long/Mali_prices_with_lat_long.csv")
+
+Burkina_price <- read.csv("https://raw.githubusercontent.com/Syverpet/Spatial_Analysis_of_Food_Prices_and_Conflicts_in_SAHEL/main/Data/Price_Data/with_lat_long/BurkinaF_prices_with_lat_long.csv")
+
+
+# IN THIS SECTION -  price columns are converted from character to numeric values, data columns are set to a date format ymd (lubridate), and data is filtered by dates 2010-01-01 and 2021-05-01.
+
+Niger_prices1 <- Niger_price %>%
+  mutate(X = row_number()) %>%
+  mutate(price = as.numeric(price)) %>%
+  mutate(date = ymd(date)) %>% filter(date >= as.Date("2010-01-01") & date <= as.Date("2021-05-01")) 
+
+Mali_prices1 <- Mali_price %>%
+  mutate(X = row_number()) %>%
+  mutate(price = as.numeric(price)) %>%
+  mutate(date = dmy(date)) %>% filter(date >= as.Date("2010-01-01") & date <= as.Date("2021-05-01")) 
+
+Burkina_prices1 <- Burkina_price %>%
+  mutate(X = row_number()) %>%
+  mutate(price = as.numeric(price)) %>%
+  mutate(date = ymd(date)) %>% filter(date >= as.Date("2010-01-01") & date <= as.Date("2021-05-01")) %>% arrange(desc(date))
+
+
+# IN THIS SECTION -  the date columns are converted to a year-month format and two new columns date-related columns are created; a year column and a quarter column.
+
+date_formatting <- function(data_frame) {
+  
+  data_frame <-separate(data_frame, Date2, c("year", "month", "day"), sep = "-", convert=TRUE)
+  data_frame2 <- select(data_frame, -c(month, day))
+  data_frame3 <- data_frame2 %>% mutate(date = as.yearmon(date, "%Y%m"))
+  data_frame4 <- data_frame3 %>% mutate(quarter = as.yearqtr(date, "%Y%m"))
+
+  {
+    return(data_frame4)
+  }
+}
+
+Niger_prices1$Date2 <- Niger_prices1$date
+Niger_prices3 <- date_formatting(Niger_prices1)
+
+Mali_prices1$Date2 <- Mali_prices1$date
+Mali_prices3 <- date_formatting(Mali_prices1)
+
+Burkina_prices1$Date2 <- Burkina_prices1$date
+Burkina_prices3 <- date_formatting(Burkina_prices1)
+
+```
+
+```{r}
+# IN THIS SECTION - data is filtered to include only the commodities Maize, Millet, Sorghum. 
+
+## variables for filtering food types:
+food <- c("Maize - Retail", "Millet - Retail", "Sorghum - Retail")
+food1 <- c("Maize (white) - Retail", "Millet - Retail", "Sorghum (white) - Retail")
+
+
+Niger_prices4 <- Niger_prices3 %>%  filter(cmname %in% food)
+
+Mali_prices4 <- Mali_prices3 %>% filter(cmname %in% food)
+
+Burkina_prices4 <- Burkina_prices3  %>% filter(cmname %in% food1)
+
+
+# IN THIS SECTION - monthly records are removed if they either are exact duplicates of other records within the same quarter, market and commodity, or if records are missing within the same quarter, eg. if there are only 2 records in for a single quarter, single market, and single commodity.
+
+remove_nonunique_records <- function(data_frame) {
+  data_frame2 <- data_frame %>%
+  group_by(quarter, mktname, cmname)
+data_frame3 <- data_frame2 %>% mutate(distinct_prices = n_distinct(price))
+data_frame4 <- data_frame3[data_frame3$distinct_prices > 2, ] %>% ungroup()
+{
+  return(data_frame4)
+}
+}
+
+Niger_prices5 <- remove_nonunique_records(Niger_prices4)
+Mali_prices5 <- remove_nonunique_records(Mali_prices4)
+Burkina_prices5 <- remove_nonunique_records(Burkina_prices4)
+```
+
+
+## Metrics for Food Prices: 
+In order to analyse the food prices meaningfully in relation to conflicts we had to aggregate them into a meaningful metric that represents how each market's prices relates to the other markets prices. We chose two different metrics, 1) The mean standard deviation for all prices at each market within each quarter. 2) How each market per quarter deviates in percent from the mean of all prices within that quarter in that country.
+
+
+### First Food Price Metric:
+```{r}
+# IN THIS SECTION - A standard deviation of prices are calculated for each commodity, each market, and each quarter is calculated based on min-max normalized prices for each commodity.
+
+# Function for calculating the standard deviation price metric:
+calculate_standard_dev <- function(data_frame) {
+  data_frame2 <- data_frame  %>%
+  group_by(cmname) %>%
+  mutate(price_norm = (price - min(price)) / (max(price) - min(price))) %>%
+  ungroup()
+  
+  data_frame3 <- data_frame2 %>%
+  group_by(quarter, mktname, cmname) %>% 
+  mutate(stdev = sd(price_norm, na.rm =TRUE)) %>%
+  ungroup()
+
+  {
+    return(data_frame3)
+  }
+}
+
+Niger_prices6 <- calculate_standard_dev(Niger_prices5)
+Mali_prices6 <- calculate_standard_dev(Mali_prices5)
+Burkina_prices6 <- calculate_standard_dev(Burkina_prices5)
+
+```
+
+```{r}
+# IN THIS SECTION - the mean of the standard deviations for all the crops at each market, per quarter is calculated.
+
+calculate_mean_stdev <- function(data_frame) {
+  data_frame2 <- data_frame %>%
+  group_by(quarter, mktname) %>%
+  mutate(stdev_mean = mean(stdev, na.rm = TRUE)) %>% 
+  ungroup()
+  {
+    return(data_frame2)
+  }
+}
+
+Niger_prices7 <- calculate_mean_stdev(Niger_prices6)
+Mali_prices7 <- calculate_mean_stdev(Mali_prices6)
+Burkina_prices7 <- calculate_mean_stdev(Burkina_prices6)
+```
+
+```{r}
+# IN THIS SECTION - The standard deviation metric for markets situated at the same location are merged. This is to avoid duplicate locations when later doing a spatial join.
+merge_same_location_markets <- function(data_frame) {
+data_frame2 <- data_frame %>%
+  group_by(quarter, lat, long) %>% 
+  mutate(stdev_mean = mean(stdev_mean, na.rm =TRUE)) %>%
+  ungroup()
+
+{
+  return(data_frame2)
+}
+}
+
+Niger_price8 <- Niger_prices7 #does not have any location markets
+
+Mali_price8 <- merge_same_location_markets(Mali_prices7)
+
+Burkina_price8 <- Burkina_prices7 #does not have any location markets
+
+```
+
+### Second Food Price Metric: for each single quarter for each single market the percent difference from the mean of food prices per country per quarter is calculated.
+
+```{r}
+# National Mean-- Price per Quarter and Commodity
+mean_diff_column <- function(data_frame) { 
+data_frame2<- data_frame %>% 
+  group_by(quarter, cmname) %>% 
+  mutate(avg_nat_mean= mean(price)) %>%
+  ungroup()
+
+data_frame3<- data_frame2%>% 
+  group_by(quarter, cmname, mktname) %>% 
+  mutate(avg_local_price= mean(price)) %>%
+  ungroup()
+
+
+data_frame4 <-data_frame3 %>% mutate(Percent_Difference = (avg_local_price - avg_nat_mean)/avg_nat_mean*100)
+
+data_frame5<-data_frame4%>%
+  group_by(quarter, mktname) %>%
+  mutate(avg_difference = mean(Percent_Difference)) %>%
+  ungroup()
+
+{
+  return(data_frame5)
+}
+}
+
+Niger_price10 <- mean_diff_column(Niger_price8)
+Mali_price10 <- mean_diff_column(Mali_price8)
+Burkina_price10 <- mean_diff_column(Burkina_price8)
+
+```
+
+## Load Conflict Data
+```{r}
+All_conflicts <- read.csv("https://raw.githubusercontent.com/Syverpet/Spatial_Analysis_of_Food_Prices_and_Conflicts_in_SAHEL/main/Data/Conflict_Data/All_Conflict_Events.csv")
+
+Niger_conflicts <- All_conflicts %>%
+  select(c(data_id, event_date, event_type, country, latitude, longitude)) %>%
+  filter(country == "Niger")
+
+Burkina_conflicts <- All_conflicts %>%
+  select(c(data_id, event_date, event_type, country, latitude, longitude)) %>%
+  filter(country == "Burkina Faso")
+
+Mali_conflicts <- All_conflicts %>%
+  select(c(data_id, event_date, event_type, country, latitude, longitude)) %>%
+  filter(country == "Mali") 
+```
+
+## Prepare Conflict Data
+```{r}
+# "add year column" function:
+
+year_column <- function(data_frame) {
+  
+  data_frame <-separate(data_frame, Date2, c("day","month","year"), sep = " ", convert=TRUE)
+  data_frame2 <- select(data_frame, -c(month, day)) 
+
+  {
+    return(data_frame2)
+  }
+
+}
+Niger_conflicts$Date2 = Niger_conflicts$event_date
+Niger_conflicts$quarter = Niger_conflicts$event_date
+Niger_conflicts2 <- year_column(Niger_conflicts)
+
+Mali_conflicts$Date2 = Mali_conflicts$event_date
+Mali_conflicts$quarter = Mali_conflicts$event_date
+Mali_conflicts2 <- year_column(Mali_conflicts)
+
+Burkina_conflicts$Date2 = Burkina_conflicts$event_date
+Burkina_conflicts$quarter = Burkina_conflicts$event_date
+Burkina_conflicts2 <- year_column(Burkina_conflicts)
+
+```
+
+```{r}   
+# function for pre_processing the conflict data
+Pre_process_conflicts <- function(data_frame) {
+  
+  data_frame2 <- data_frame %>% mutate(event_date = dmy(event_date)) %>%
+  rename("date" = "event_date", "type" = "event_type", "lat" = "latitude", "long" = "longitude") %>% filter(type %in% conflicts_filter)  #%>% filter(date >= as.Date("2019-01-01") & date <= as.Date("2020-01-01"))
+  
+  data_frame2$date <- as.yearmon(data_frame2$date, "%Y%m")
+  data_frame2$quarter <- as.yearqtr(dmy(data_frame2$quarter), "%Y%m")
+  
+  final_pre_processsed <- data_frame2 %>% arrange(date) #%>% filter(quarter == as.yearqtr(quarter_filter))
+  
+  {
+    return(final_pre_processsed)
+  }
+}
+
+Niger_conflicts3 <- Pre_process_conflicts(Niger_conflicts2)
+
+Mali_conflicts3 <- Pre_process_conflicts(Mali_conflicts2)
+
+Burkina_conflicts3 <- Pre_process_conflicts(Burkina_conflicts2)
+
+#ggplot(Niger_conflicts3, aes(date, type)) + geom_point() + theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
+## Make Simple Feature Geometry Collections from coordinates (for both conflict events and food prices)
+```{r}
+# Convert Conflict coordinates to WKT and simple features geometry collection:
+
+WKT_conversion_function <- function(data_frame) {
+  data_frame$geometry <- paste("POINT(",data_frame$long, ",", data_frame$lat,")")
+
+  data_frame2 <- data_frame %>% mutate(geometry = str_replace_all(geometry, " ", ""))
+
+  data_frame3 <- data_frame2 %>% mutate(geometry = str_replace_all(geometry, ",", " "))  
+
+  {
+    return(data_frame3)
+  }
+}
+
+WKTcol_to_sfc_and_make_sf_collection <- function(data_frame) {
+  
+  data_frame$geometry <- st_as_sfc(data_frame$geometry)
+  final_sf_collection <- st_sf(data_frame, crs = "EPSG:4326")
+  {
+    return(final_sf_collection)
+  }
+}
+
+
+# Convert conflicts geometries
+Niger_conflicts4 <- WKT_conversion_function(Niger_conflicts3)
+Niger_conflicts5 <- WKTcol_to_sfc_and_make_sf_collection(Niger_conflicts4)
+
+Mali_conflicts4 <- WKT_conversion_function(Mali_conflicts3)
+Mali_conflicts5 <- WKTcol_to_sfc_and_make_sf_collection(Mali_conflicts4)
+
+Burkina_conflicts4 <- WKT_conversion_function(Burkina_conflicts3)
+Burkina_conflicts5 <- WKTcol_to_sfc_and_make_sf_collection(Burkina_conflicts4)
+
+
+# Convert prices geometries
+Niger_price11 <- WKT_conversion_function(Niger_price10)
+Niger_price12 <- WKTcol_to_sfc_and_make_sf_collection(Niger_price11)
+
+
+Mali_price11 <- WKT_conversion_function(Mali_price10)
+Mali_price12 <- WKTcol_to_sfc_and_make_sf_collection(Mali_price11)
+
+Burkina_price11 <- WKT_conversion_function(Burkina_price10)
+Burkina_price12 <- WKTcol_to_sfc_and_make_sf_collection(Burkina_price11)
+
+```
+
+## Load Country Boundary Data:
+```{r}
+Niger_country <- st_read("https://raw.githubusercontent.com/Syverpet/Spatial_Analysis_of_Food_Prices_and_Conflicts_in_SAHEL/main/Data/Country_Boundaries/Niger_boundaries.geojsonl.json")
+Mali_country <- st_read("https://raw.githubusercontent.com/Syverpet/Spatial_Analysis_of_Food_Prices_and_Conflicts_in_SAHEL/main/Data/Country_Boundaries/Mali_boundaries.geojsonl.json")
+Burkina_country <- st_read("https://raw.githubusercontent.com/Syverpet/Spatial_Analysis_of_Food_Prices_and_Conflicts_in_SAHEL/main/Data/Country_Boundaries/Burkina_boundaries.geojsonl.json")
+All_countries <- st_read("https://raw.githubusercontent.com/Syverpet/Spatial_Analysis_of_Food_Prices_and_Conflicts_in_SAHEL/main/Data/Country_Boundaries/All_countries_boundaries.geojsonl.json")
+
+# Plot country boundaries:
+All_countries %>% select(ADMIN) %>% plot(reset = FALSE, col = NA, border = "grey", cex = 0.1)
+Niger_country %>% select(ADMIN) %>% plot(add = TRUE, col = "blue", border = "grey", cex = 0.1)
+Mali_country %>% select(ADMIN) %>% plot(add = TRUE, col = "green", border = "grey", cex = 0.1)
+Burkina_country %>% select(ADMIN) %>% plot(add = TRUE, col = "red", border = "grey", cex = 0.1)
+
+```
+
+
+## Visualisation
+
+```{r}
+Niger_price20 <- Niger_price12 %>% select(price, geometry)
+Mali_price20 <- Mali_price12 %>% select(price, geometry)
+Burkina_price20 <- Burkina_price12 %>% select(price, geometry)
+
+Niger_conflicts6 <- Niger_conflicts5 %>% mutate(conflicts_n = 1) %>% select(conflicts_n)
+Mali_conflicts6 <- Mali_conflicts5 %>% mutate(conflicts_n = 1) %>% select(conflicts_n)
+Burkina_conflicts6 <- Burkina_conflicts5 %>% mutate(conflicts_n = 1) %>% select(conflicts_n)
+
+```
+
+```{r}
+library(tidyr)
+library(viridis)
+library(colorspace)
+
+# Plot all countries
+All_countries2 <- All_countries %>% select(ADMIN)
+
+plot(All_countries2, reset = FALSE, col = NA, border = "grey", cex = 0.1)
+
+# Plot prices
+Niger_price12 %>%
+    select(stdev)%>%
+      plot(graticule = TRUE, col = c("lightblue2", "royalblue1", "royalblue4", "navyblue"), breaks = "quantile", axes = TRUE, pch = 16, add = TRUE)
+
+Mali_price12 %>%
+    select(stdev)%>%
+      plot(graticule = TRUE, col = c("lightblue2", "royalblue1", "royalblue4", "navyblue"), breaks = "quantile", axes = TRUE, pch = 16, add = TRUE)
+
+Burkina_price12 %>%
+    select(stdev)%>%
+      plot(graticule = TRUE, col = c("lightblue2", "royalblue1", "royalblue4", "navyblue", "orange"), breaks = "quantile", axes = TRUE, pch = 16, add = TRUE)
+
+# Plot conflicts
+Niger_conflicts5 %>%
+    select(type) %>%
+    plot(graticule = TRUE, col= "red", add = TRUE, axes = TRUE, pch = 16,
+  cex = 0.1, bg = 0, lwd = 1, lty = 1, type = "p",)
+
+Mali_conflicts5 %>%
+    select(type) %>%
+    plot(graticule = TRUE, col= "red", add = TRUE, axes = TRUE, pch = 16,
+  cex = 0.1, bg = 0, lwd = 1, lty = 1, type = "p",)
+
+Burkina_conflicts5 %>%
+    select(type) %>%
+    plot(graticule = TRUE, col= "red", add = TRUE, axes = TRUE, pch = 16,
+  cex = 0.1, bg = 0, lwd = 1, lty = 1, type = "p",)
+
+
+
+
+
+
+
+#plot(st_buffer(Niger_price6, dist = 1, endCapStyle="ROUND"), add = TRUE, main = "endCapStyle: ROUND", col = NA, border = "grey")
+#plot(st_buffer(Mali_price6, dist = 1, endCapStyle="ROUND"), add = TRUE, main = "endCapStyle: ROUND", col = NA, border = "grey")
+#plot(st_buffer(Burkina_price6, dist = 1, endCapStyle="ROUND"), add = TRUE, main = "endCapStyle: ROUND", col = NA, border = "grey")
+```
+
+```{r}
+
+Niger_year_conflicts <- Niger_conflicts3 %>% group_by(quarter) %>% summarise(n_distinct(data_id))
+Mali_year_conflicts <- Mali_conflicts3 %>% group_by(quarter) %>% summarise(n_distinct(data_id))
+Burkina_year_conflicts <- Burkina_conflicts3 %>% group_by(quarter) %>% summarise(n_distinct(data_id))
+
+Niger_year_conflicts2 <- Niger_year_conflicts %>% rename("n_conflicts" = "n_distinct(data_id)")
+Mali_year_conflicts2 <- Mali_year_conflicts %>% rename("n_conflicts" = "n_distinct(data_id)")
+Burkina_year_conflicts2 <- Burkina_year_conflicts %>% rename("n_conflicts" = "n_distinct(data_id)")
+
+ggplot() + geom_line(data = Niger_year_conflicts2, linetype = "dashed", col = "green", aes(quarter, n_conflicts)) +
+geom_line(data = Burkina_year_conflicts2, linetype = "dashed", col= "red", aes(quarter, n_conflicts)) + geom_line() +
+geom_line(data = Mali_year_conflicts2, linetype = "dashed", col = "blue", aes(quarter, n_conflicts))
+
+#ean_years <- Niger_prices5 %>% group_by(year) %>% summarise(mean(stdev_mean))
+
+#write.csv(data, "C:/Users/Laptop/Documents/Munster/5. Data to Knowledge/Food Prices SAHEL/Data/Burkina_PerQuarter_conflicts.csv")
+
+
+```
+```{r}
+library(reshape2)
+
+# Explore annual std changes:
+Niger_mean_quarter <- Niger_price12 %>% group_by(quarter) %>% summarise(stdev_mean = mean(stdev_mean))
+Mali_mean_quarter <- Mali_price12 %>% group_by(quarter) %>% summarise(stdev_mean = mean(stdev_mean))
+Burkina_mean_quarter <- Burkina_price12 %>% group_by(quarter) %>% summarise(stdev_mean = mean(stdev_mean))
+
+x1 <- Niger_mean_quarter %>% select(stdev_mean)
+x2 <- Mali_mean_quarter %>% select(stdev_mean)
+x3 <- Burkina_mean_quarter %>% select(stdev_mean)
+
+
+#df1 <- data.frame(x1, x2, x3)
+
+ggplot() + 
+  geom_line(data= Niger_mean_quarter, aes(y=stdev_mean, x=quarter, col="Niger")) + 
+  
+  geom_line(data=Mali_mean_quarter, aes(y = stdev_mean, x=quarter,col = "Mali" , linetype = "Mali")) + 
+  
+  geom_line(data= Burkina_mean_quarter, aes(y = stdev_mean, x=quarter,col="Burkina Faso")) + 
+
+  labs(title="Quarterly price standard deviation per country", y="standard deviation of min-max normalised prices", x="quarter", 
+       color=NULL) + scale_color_manual(labels = c("Niger", "Burkina Faso", "Mali"), 
+                     values = c("Niger"="#00ba38", "Burkina Faso"="#f8766d", "Mali" = "blue")) +  # line color
+  theme(axis.text.x = element_text( vjust=0.5 , size = 8)) +
+
+  scale_linetype_manual(name = "Food Prices",
+                     labels = c("Niger", "Burkina Faso", "Mali"),
+                     values = c("Niger" = 1, "Burkina Faso" = 1, "Mali" = 2)) + 
+  scale_color_manual(values = c("red", "dodgerblue3", "green"))
+
+Niger_mean_quarter2 <- select(as.data.frame(Niger_mean_quarter), -geometry)
+Mali_mean_quarter2 <- select(as.data.frame(Mali_mean_quarter), -geometry)
+Burkina_mean_quarter2 <- select(as.data.frame(Burkina_mean_quarter), -geometry)
+
+try_x <- merge(Niger_mean_quarter2, Mali_mean_quarter2, by= "quarter", all = TRUE)
+try_x3 <- merge(try_x, Burkina_mean_quarter2, by= "quarter", all = TRUE)
+try_x3
+#write.csv(try_x3, "C:/Users/Laptop/Documents/Munster/5. Data to Knowledge/Food Prices SAHEL/Data/All_meanPrice_quarter.csv")
+
+```
+```{r}
+df1 <- data.frame(x1,x2,x3)
+df2 <- melt(df1)
+
+ggplot(data=df2,aes(x=value, col=variable, linetype=variable)) +
+ stat_density(position = "identity", geom = "line") +
+  theme_bw() +
+  theme(axis.text.y = element_text(angle = 90, hjust = 0.3), 
+        axis.title.x = element_text(vjust = - 0.5), 
+        plot.title = element_text(vjust = 1.5), 
+        legend.title = element_blank(), 
+        legend.key = element_blank(), legend.text = element_text(size = 10)) +
+  scale_color_manual(values = c("red", "dodgerblue3", "red", "dodgerblue3")) + 
+  scale_linetype_manual(values = c(1, 1, 2, 2)) +
+  theme(legend.key.size =  unit(0.5, "in"))
+```
+```{r}
+plot(pointpat1, axes = TRUE, graticule = TRUE, reset = FALSE)
+plot(bb3, add =TRUE)
+
+
+plot(All_countries2, col= NA, add =TRUE)
+
+
+den1 <- density(pointpat1, sigma = bw.ppl)
+
+
+
+plot(den1)
+plot(pointpat1, add=TRUE)
+plot(den2, axes = TRUE, graticule= TRUE)
+plot(pointpat2, add=TRUE)
+
+```
+## ANALYSIS STARTING HERE
+
+```{r}
+suppressPackageStartupMessages(library(spatstat))
+library(stars)
+
+
+conflicts_filter_final = c("Battles", "Violence against civilians", "Explosions/Remote violence")
+
+#conflicts_filter_final = c("Battles", "Protests", "Violence against civilians", "Explosions/Remote violence", "Riots")
+
+Niger_conflicts6 <- Niger_conflicts5 %>% filter(type %in% conflicts_filter_final)
+Mali_conflicts6 <- Mali_conflicts5 %>% filter(type %in% conflicts_filter_final)
+Burkina_conflicts6 <- Burkina_conflicts5 %>% filter(type %in% conflicts_filter_final)
+
+
+
+merged_list_margets <- rbind(Niger_price12, Mali_price12, Burkina_price12)
+
+merged_list_margets2 <- merged_list_margets %>% filter(quarter != "2021 Q1")
+
+#merged_list_margets3 <- merged_list_margets2 %>% group_by(quarter, mktname) %>% summarise(mean(price))
+
+unique_quarters <- c(unique(merged_list_margets2$quarter)) 
+
+
+  # All_countries polygons
+All_countries2 <- All_countries %>% st_transform("+init=epsg:3857") %>% select(ADMIN)
+
+# Bounding Box for All_countries3
+bb <- st_geometry(All_countries2) %>% st_union()
+
+BW_df <- data.frame()
+
+meadian_bandwidth <- 94503
+
+
+for (Q in unique_quarters) {
+  print(Q)
+
+
+# Point data for conflicts for each country
+Niger_points <- Niger_conflicts6 %>% st_transform("+init=epsg:3857") %>% filter(quarter == Q)
+Mali_points <- Mali_conflicts6 %>% st_transform("+init=epsg:3857") %>% filter(quarter == Q)
+Burkina_points <- Burkina_conflicts6 %>% st_transform("+init=epsg:3857") %>% filter(quarter == Q)
+
+# Make point_pattern
+point_patern = c(bb, st_geometry(Niger_points), st_geometry(Mali_points), st_geometry(Burkina_points)) %>% as.ppp()
+
+
+skip_to_next <- FALSE
+
+  tryCatch(density_map <- density(point_patern, sigma = 20000, dimyx = 2000), error = function(e) { skip_to_next <<- TRUE})
+
+  if(skip_to_next) { next } 
+#density_map <- density(point_patern, sigma = bw.ppl, dimyx = 500) # sigma = bw.ppl using likelihood cross-validation to find bandwidth
+
+
+#print attributes:
+print("Bandwidht:")
+print(attributes(density_map)$sigma)
+#BW_df[nrow(BW_df) + 1,1] = attributes(density_map)$sigma
+#print(BW_df)
+# To stars
+density_map_stars <- st_as_stars(density_map) %>% st_set_crs(3857)
+
+
+Niger_price13 <- Niger_price12 %>% filter(quarter == Q)
+Mali_price13 <- Mali_price12 %>% filter(quarter == Q)
+Burkina_price13 <- Burkina_price12 %>% filter(quarter == Q)
+
+# Market points
+All_markets_final <- rbind(Niger_price13, Mali_price13, Burkina_price13) %>% st_transform("+init=epsg:3857")
+
+# count column
+All_markets_final$counts <- 1
+
+# Aggregate std to one row per mktname/quarter:
+All_markets_final2 <- All_markets_final %>% group_by(mktname) %>% summarise(final_std = sum(stdev_mean/sum(counts)), final_avg_diff = sum(avg_difference/sum(counts)))
+
+# Extract values for each market point from density map:
+extracted <- st_extract(density_map_stars, All_markets_final2)
+
+Final_join <- st_join(All_markets_final2, extracted, join = st_equals)
+
+
+FINALFINAL20 <- rbind(FINALFINAL20, Final_join)
+
+print(nrow(FINALFINAL20))
+
+}
+
+#FINALFINAL <- Final_join[1,1:5]
+
+#FINALFINAL20 <- FINALFINAL %>% mutate(final_std = 0) %>% mutate(v = 0) %>% mutate(final_avg_diff = 0)
+
+print("13")
+with(na.omit(FINALFINAL13), cor(final_std, v)) # With default, dimyx = 1000,  0.02937088
+with(na.omit(FINALFINAL13), cor(final_avg_diff, v)) # with default, dimyx = 1000, 0.01454534
+
+print("14")
+with(na.omit(FINALFINAL14), cor(final_std, v)) # with sigma = bw.ppl, dimyx = 1000, 0.02939231 
+with(na.omit(FINALFINAL14), cor(final_avg_diff, v)) # with sigma = bw.ppl, dimyx = 1000, 0.03996312
+
+print("15")
+with(na.omit(FINALFINAL15), cor(final_std, v)) # with sigma = bw.ppl, dimyx = 2000, 0.02921727
+with(na.omit(FINALFINAL15), cor(final_avg_diff, v)) # with sigma = bw.ppl, dimyx = 2000, 0.04001226
+
+print("16")
+with(na.omit(FINALFINAL16), cor(final_std, v)) # with sigma = bw.ppl, dimyx = 2000, 
+with(na.omit(FINALFINAL16), cor(final_avg_diff, v)) # with sigma = bw.ppl, dimyx = 2000
+
+print("17")
+with(na.omit(FINALFINAL17), cor(final_std, v)) # with sigma = meadian_bandwidth, dimyx = 2000, 0.02617444
+with(na.omit(FINALFINAL17), cor(final_avg_diff, v)) # with sigma = meadian_bandwidth, dimyx = 2000, 0.0357589
+
+print("18")
+with(na.omit(FINALFINAL18), cor(final_std, v)) # with sigma = 30000, dimyx = 2000, 0.01674311
+with(na.omit(FINALFINAL18), cor(final_avg_diff, v)) # with sigma = 30000, dimyx = 2000, 0.07092478
+
+print("19")
+with(na.omit(FINALFINAL19), cor(final_std, v)) # with sigma = 10000, dimyx = 1000, 0.01821138
+with(na.omit(FINALFINAL19), cor(final_avg_diff, v)) # with sigma = 10000, dimyx = 1000, 0.1909487
+
+print("20")
+with(na.omit(FINALFINAL20), cor(final_std, v)) # with sigma = 20000, dimyx = 2000, 
+with(na.omit(FINALFINAL20), cor(final_avg_diff, v)) # with sigma = 20000, dimyx = 2000,
+
+#plot(density_map, reset = FALSE, col = c("lightblue2", "royalblue1", "royalblue4", "navyblue") )
+#plot(point_patern, add = TRUE)
+#plot(extracted, add = TRUE , pch = 16, border = 2, size = 5)
+
+
+histo <- FINALFINAL20$v
+hist(histo, breaks = 70)
+plot(density_map)
+
+```
+
+```{r}
+Niger_pointsx <- Niger_conflicts6 %>% st_transform("+init=epsg:3857") %>% filter(quarter == "2013 Q2")
+Mali_pointsx <- Mali_conflicts6 %>% st_transform("+init=epsg:3857")  %>% filter(quarter == "2013 Q2")
+Burkina_pointsx <- Burkina_conflicts6 %>% st_transform("+init=epsg:3857")  %>% filter(quarter == "2013 Q2")
+
+
+point_paternx = c(bb, st_geometry(Niger_pointsx), st_geometry(Mali_pointsx), st_geometry(Burkina_pointsx)) %>% as.ppp()
+
+plot(point_paternx, reset = FALSE, pch = 16, cex = 0.1)
+plot(All_countries2, col= NA, border = "grey", add = TRUE)
+
+de_text <- density(point_paternx, sigma = 105308.3, dimyx = 2000)
+de_text2 <- density(point_paternx, dimyx = 2000)
+
+de_text_stars <-st_as_stars(de_text2) %>% st_set_crs(3857)
+
+plot(de_text)
+
+print(attributes(de_text)$sigma)
+
+
+
+#write_stars(de_text_stars, "C:/Users/Laptop/Documents/Munster/5. Data to Knowledge/Food Prices SAHEL/DensityExample2_2013_Q2.tif")
+```
+```{r}
+
+```
+
+
+
+```{r}
+
+Niger_margets_TEST2 <- Niger_price5 %>% group_by(date) %>% summarise(price_stdev = mean(stdev_mean))
+Mali_margets_TEST2 <- Mali_price5 %>% group_by(date) %>% summarise(price_stdev = mean(stdev_mean))
+Burkina_margets_TEST2 <- Burkina_price5 %>% group_by(date) %>% summarise(price_stdev = mean(stdev_mean))
+
+
+ggplot() + geom_line(data = Niger_margets_TEST2, col = "green", aes(date, price_stdev)) +
+geom_line(data = Burkina_margets_TEST2, col= "red", aes(date, price_stdev)) + geom_line() +
+geom_line(data = Mali_margets_TEST2, col = "blue", aes(date, price_stdev))
+
+
+BW_dfx = BW_df
+
+
+BW_dfx[1, 2] = 2010
+BW_dfx[2, 2] = 2011.25
+BW_dfx[3, 2] = 2011.75
+BW_dfx[4, 2] = 2012.5
+BW_dfx[5, 2] = 2013.25
+BW_dfx[6, 2] = 2014
+BW_dfx[7, 2] = 2014.25
+BW_dfx[8, 2] = 2014.5
+BW_dfx[9, 2] = 2015
+BW_dfx[10, 2] = 2015.25
+BW_dfx[11, 2] = 2015.5
+BW_dfx[12, 2] = 2017
+BW_dfx[13, 2] = 2017.5
+BW_dfx[14, 2] = 2019.5
+BW_dfx[15, 2] = 2020
+BW_dfx[16, 2] = 2020.5
+BW_dfx[17, 2] = 2020.75
+BW_dfx[18, 2] = 2010.5
+BW_dfx[19, 2] = 2010.75
+BW_dfx[20, 2] = 2012.75
+BW_dfx[21, 2] = 2017.25
+BW_dfx[22, 2] = 2018
+BW_dfx[23, 2] = 2020.25
+BW_dfx[24, 2] = 2016.25
+BW_dfx[25, 2] = 2011
+BW_dfx[26, 2] = 2011.5
+BW_dfx[27, 2] = 2012
+BW_dfx[28, 2] = 2013.5
+BW_dfx[29, 2] = 2013.75
+BW_dfx[30, 2] = 2014.75
+BW_dfx[31, 2] = 2016.5
+BW_dfx[32, 2] = 2018.5
+BW_dfx[33, 2] = 2018.75
+BW_dfx[34, 2] = 2013
+BW_dfx[35, 2] = 2019.25
+BW_dfx[36, 2] = 2019.75
+BW_dfx[37, 2] = 2018.25
+BW_dfx[38, 2] = 2017.75
+BW_dfx[39, 2] = 2016
+BW_dfx[40, 2] = 2019
+BW_dfx[41, 2] = 2012.25
+BW_dfx[42, 2] = 2015.75
+BW_dfx[43, 2] = 2016.75
+
+hist(BW_dfx)
+
+BW_dfx2 <- BW_dfx %>% arrange(V2)
+
+ggplot() + geom_point(data = BW_dfx2, aes(V2, V1))
+
+write.csv(data, "C:/Users/Laptop/Documents/Munster/5. Data to Knowledge/Food Prices SAHEL/KERNELbandwidth_for_all_quarters.csv")
+```
