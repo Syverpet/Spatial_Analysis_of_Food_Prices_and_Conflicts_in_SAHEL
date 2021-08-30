@@ -355,14 +355,7 @@ Burkina_country %>% select(ADMIN) %>% plot(add = TRUE, col = "red", border = "gr
 #### Let's expore the data we have so far. First, let's look at the coundtries of interest:
 
 ```{r}
-basic_map <- 'geom_sf(data = All_countries, fill= "antiquewhite") +
-  annotation_scale(location = "br", width_hint = 0.5) + 
-  annotation_north_arrow(location = "tl", which_north = "true", pad_x = unit(0.75, "in"), pad_y = unit(0.5, "in"), style = north_arrow_fancy_orienteering) +
-  xlab("Longitude") + 
-  ylab("Latitude") + 
-  ggtitle("Countries of Interest") + 
-  theme(plot.title = element_text(size=20, face="bold")) +
-  theme(panel.grid.major = element_line(color = gray(.5), linetype = "dashed", size = 0.5), panel.background = element_rect(fill = "aliceblue"))'
+  
 
 ggplot() + 
   
@@ -386,10 +379,18 @@ ggplot() +
 
 
 ```{r}
-ggplot() +
+ggplot()  +
+  geom_sf(data = All_countries, fill= "antiquewhite") +
   geom_sf(data = rbind(Niger_conflicts5, Mali_conflicts5, Burkina_conflicts5), size=0.3, aes(col = "red")) +
-  basic_map +
-  scale_color_manual(values=c("red", "green"), labels=c("Conflicts")) + labs(color='Legend')
+  annotation_scale(location = "br", width_hint = 0.5) + 
+  annotation_north_arrow(location = "tl", which_north = "true", pad_x = unit(0.75, "in"), pad_y = unit(0.5, "in"), style = north_arrow_fancy_orienteering) +
+  xlab("Longitude") + 
+  ylab("Latitude") + 
+  ggtitle("Countries of Interest") + 
+  theme(plot.title = element_text(size=20, face="bold")) +
+  theme(panel.grid.major = element_line(color = gray(.5), linetype = "dashed", size = 0.5), panel.background = element_rect(fill = "aliceblue")) +
+  
+  scale_color_manual(values=c("red"), labels=c("Conflicts")) + labs(color='Legend') 
 ```
 #### And the spatial distribution of the markets where the food prices have been recorded between 2010-2020:
 ```{r}
